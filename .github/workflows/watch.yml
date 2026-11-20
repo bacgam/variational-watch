@@ -1,0 +1,55 @@
+name: variational-watch
+
+on:
+  schedule:
+    - cron: "4-59/5 * * * *"   # 5분마다(매시 4·9·14…분). 정각은 GitHub이 붐벼 실행이 밀리거나 빠지므로 피함
+  workflow_dispatch:         # Actions 탭에서 수동 실행, 또는 외부 알람(cron-job.org)이 API로 실행
+    inputs:
+      quiet:
+        description: "새 소식 없을 때 확인 메시지 안 보냄 (외부 알람용)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: variational-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: write            # keepalive 커밋용
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # 마지막으로 본 위치(state.json)를 직전 실행에서 이어받는다
+      - uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: state-
+
+      - run: python watch.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+          QUIET: ${{ inputs.quiet }}
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: state.json
+          key: state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # 공개 저장소의 예약 실행은 60일간 활동이 없으면 꺼지므로 50일마다 빈 커밋을 남긴다
+      - name: keepalive
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $((50*86400)) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive"
+            git push
+          fi
