@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 import urllib.parse
 import urllib.request
 
@@ -249,6 +250,20 @@ def check_wallets(st, out):
             check_wallet(chain, addr, label, st.setdefault(f"{chain} {addr}", {}), cache, out)
 
 
+def heartbeat(st, n_alerts, out):
+    """주가 바뀐 뒤 첫 실행 때 지난주 실행·알림 횟수를 out에 추가한다. 이 메시지가 안 오면 봇이 멈춘 것.
+    주 경계는 월요일 0시 UTC(= 한국 시간 오전 9시)."""
+    y, w, _ = datetime.now(timezone.utc).isocalendar()
+    week = f"{y}-W{w:02d}"
+    if st.get("week") and st["week"] != week:
+        out.append(f"💓 variational-watch 주간 점검: 정상 작동 중\n"
+                   f"지난주 실행 {st['runs']:,}회(5분마다면 약 2,000회) · 알림 {st['alerts']}건")
+        st.update(runs=0, alerts=0)
+    st["week"] = week
+    st["runs"] = st.get("runs", 0) + 1
+    st["alerts"] = st.get("alerts", 0) + n_alerts
+
+
 def send(text):
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not (token and chat):
@@ -281,6 +296,8 @@ def main():
             st["fails"] = st.get("fails", 0) + 1
             if st["fails"] == 3:
                 alerts.append(f"⚠️ {name} 수집 3번 연속 실패: {e!r}")
+
+    heartbeat(state.setdefault("주간 점검", {}), len(alerts), alerts)
 
     # Actions 탭에서 수동 실행하면 새 소식이 없어도 확인 메시지를 보낸다(설정 점검용). 외부 알람(QUIET)은 제외
     if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and os.environ.get("QUIET") != "true":

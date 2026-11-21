@@ -11,6 +11,7 @@ Variational(Omni)의 $VAR TGE·포인트 관련 변화를 5분마다 확인해 �
 | 🌐 | variational.io 아래 새 하위 주소의 인증서 발급(Cert Spotter API, 1시간마다). 링크는 사이트가 아니라 인증서 기록 |
 | 👛 | 팀 지갑이 처음 보는 종류의 컨트랙트를 호출함. 종류는 코드 지문(코드 길이+함수 목록)으로 가르므로, 정산 풀 생성·USDC 전송처럼 같은 종류를 반복하는 일상 거래는 뺌 |
 | ⚠️ ✅ | 수집 3번 연속 실패 / 그 뒤 복구 |
+| 💓 | 주간 점검: 매주 월요일 오전 9시(한국 시간) 이후 첫 실행 때 지난주 실행·알림 횟수. 이게 안 오면 봇이 멈춘 것(cron-job.org 중단, 토큰 만료 등) |
 
 팀 지갑은 공식 문서 [Mainnet Contracts](https://docs.variational.io/technical-documentation/mainnet-contracts)의 주소에서 정한다. 지갑인 주소(Protocol Treasury, Core OLP Vault)는 그대로 쓰고, 컨트랙트(Settlement Pool Factory, Oracle)는 배포한 지갑을 첫 실행 때 찾아 감시한다. 이 지갑들은 Arbitrum·Ethereum에서 본다.
 
