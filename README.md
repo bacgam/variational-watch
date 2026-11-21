@@ -9,12 +9,14 @@ Variational(Omni)의 $VAR TGE·포인트 관련 변화를 5분마다 확인해 �
 | 🚨 | TGE·포인트 신호: 바뀐 문서 줄·새 페이지·하위 주소·지갑 호출에 airdrop, claim, merkle, distribut, vesting, tge, points, snapshot, unlock, allocation, genesis, VAR. 팀 지갑의 새 컨트랙트 배포, 이름에 Variational이 들어간 컨트랙트와의 첫 거래도 🚨 |
 | 📄 | 공식 문서(docs.variational.io) 변경(1시간마다). $VAR·리워드·포인트·로드맵·컨트랙트 주소 페이지는 바뀌면 항상, 나머지 페이지는 바뀐 줄에 위 단어가 있을 때만. 새 페이지·사라진 페이지(🗑️)도 알림 |
 | 🌐 | variational.io 아래 새 하위 주소의 인증서 발급(Cert Spotter API, 1시간마다). 링크는 사이트가 아니라 인증서 기록 |
-| 👛 | 팀 지갑이 처음 상대하는 컨트랙트를 호출함(Arbitrum·Ethereum). 같은 컨트랙트를 반복해서 부르는 일상 거래는 뺌 |
+| 👛 | 팀 지갑이 처음 보는 종류의 컨트랙트를 호출함. 종류는 코드 지문(코드 길이+함수 목록)으로 가르므로, 정산 풀 생성·USDC 전송처럼 같은 종류를 반복하는 일상 거래는 뺌 |
 | ⚠️ ✅ | 수집 3번 연속 실패 / 그 뒤 복구 |
 
-팀 지갑은 공식 문서 [Mainnet Contracts](https://docs.variational.io/technical-documentation/mainnet-contracts)의 주소에서 정한다. 지갑인 주소(Protocol Treasury, Core OLP Vault)는 그대로 쓰고, 컨트랙트(Settlement Pool Factory, Oracle)는 배포한 지갑을 첫 실행 때 찾아 감시한다.
+팀 지갑은 공식 문서 [Mainnet Contracts](https://docs.variational.io/technical-documentation/mainnet-contracts)의 주소에서 정한다. 지갑인 주소(Protocol Treasury, Core OLP Vault)는 그대로 쓰고, 컨트랙트(Settlement Pool Factory, Oracle)는 배포한 지갑을 첫 실행 때 찾아 감시한다. 이 지갑들은 Arbitrum·Ethereum에서 본다.
 
-키워드는 `watch.py` 위쪽의 `AIRDROP`, 항상 알릴 문서는 `KEY_PAGES`, 공식 주소는 `OFFICIAL`, 도메인은 `DOMAINS`에서 고친다.
+테스트넷(Omni 테스트넷 = Arbitrum Sepolia)은 테스트넷 정산 풀을 만드는 운영 지갑(`TESTNET_WALLETS`)을 본다.
+
+키워드는 `watch.py` 위쪽의 `AIRDROP`, 항상 알릴 문서는 `KEY_PAGES`, 공식 주소는 `OFFICIAL`, 테스트넷 지갑은 `TESTNET_WALLETS`, 도메인은 `DOMAINS`에서 고친다.
 
 ## 설정 (처음 한 번)
 

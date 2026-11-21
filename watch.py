@@ -5,6 +5,7 @@ GitHub Actions에서 5분마다 실행된다. 텔레그램 설정(환경변수)�
 마지막으로 본 위치는 state.json에 저장한다. 처음 실행할 때는 기준점만 잡고 알림을 보내지 않는다.
 """
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -33,9 +34,15 @@ OFFICIAL = {
     "0x0f820b9afc270d658a9fd7d16b1bdc45b70f074c": "Settlement Pool Factory",
     "0x84be56470d45b7f6629a66a219a38681f6ba6172": "Oracle",
 }
-# 팀 지갑을 볼 체인: (Etherscan chainid, 탐색기). 토큰은 Ethereum에 나올 수도 있어 같은 지갑을 둘 다 본다
-CHAINS = {"Arbitrum": (42161, "https://arbiscan.io"), "Ethereum": (1, "https://etherscan.io")}
-SKIP_METHODS = {"0xa9059cbb", "0x095ea7b3"}  # transfer, approve: 이미 상대한 컨트랙트면 알리지 않는다
+# 체인: (Etherscan chainid, 탐색기)
+CHAINS = {
+    "Arbitrum": (42161, "https://arbiscan.io"),
+    "Ethereum": (1, "https://etherscan.io"),
+    "Arbitrum Sepolia": (421614, "https://sepolia.arbiscan.io"),
+}
+MAINNET_CHAINS = ["Arbitrum", "Ethereum"]  # 공식 주소에서 찾은 팀 지갑을 볼 체인. 토큰은 Ethereum에 나올 수도 있어 둘 다 본다
+# Omni 테스트넷(Arbitrum Sepolia) 지갑. 출처: 테스트넷 입금 대상 정산 풀 0x3e96…21E3의 생성자(거래 100만 건 넘는 운영 지갑)
+TESTNET_WALLETS = {"0xc27e00de4eafffa60b6b008c4520517ed00294cb": "테스트넷 운영 지갑"}
 
 # TGE·포인트 신호. 대문자 VAR만 토큰 기호로 본다(Variational·variable과 섞이지 않게)
 AIRDROP = re.compile(r"(?i:airdrop|claim|merkle|distribut|vesting|\btge\b|\bpoints?\b|snapshot|unlock|allocation|genesis)|\bVAR\b")
@@ -55,6 +62,10 @@ def etherscan(chainid, **params):
     time.sleep(0.25)  # 무료 키 한도: 초당 5회
     q = urllib.parse.urlencode({"chainid": chainid, **params, "apikey": os.environ["ETHERSCAN_API_KEY"]})
     j = get_json(f"https://api.etherscan.io/v2/api?{q}")
+    if "jsonrpc" in j:  # module=proxy 응답은 RPC 형식
+        if "error" in j:
+            raise RuntimeError(f"Etherscan: {j['error']}")
+        return j["result"]
     if j.get("status") == "1":
         return j["result"]
     if str(j.get("message", "")).startswith("No ") or str(j.get("result", "")).startswith("No "):
@@ -164,44 +175,65 @@ def team_wallets(st):
     return wallets
 
 
+def fingerprint(chainid, addr, cache):
+    """컨트랙트 종류를 가르는 코드 지문: 코드 길이 + 함수 선택자 목록. 프록시면 실제 구현 코드로 본다.
+    같은 틀로 찍어낸 컨트랙트(정산 풀 등)는 내부 값(immutable)만 달라서 지문이 같다."""
+    key = f"{chainid}:{addr}"
+    if key not in cache:
+        impl = etherscan(chainid, module="proxy", action="eth_getStorageAt", address=addr, tag="latest",
+                         position="0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc")  # EIP-1967 구현 주소 칸
+        if int(impl or "0x0", 16):
+            addr = "0x" + impl[-40:]
+        b = bytes.fromhex(etherscan(chainid, module="proxy", action="eth_getCode", address=addr, tag="latest")[2:])
+        sels, i = set(), 0
+        while i < len(b):
+            if b[i] == 0x63:  # PUSH4: 함수 선택자
+                sels.add(b[i + 1:i + 5].hex())
+            i += 1 + (b[i] - 0x5f if 0x60 <= b[i] <= 0x7f else 0)
+        cache[key] = hashlib.sha1(f"{len(b)}:{','.join(sorted(sels))}".encode()).hexdigest()[:16]
+        while len(cache) > 5000:  # 오래된 것부터 지운다
+            cache.pop(next(iter(cache)))
+    return cache[key]
+
+
 def check_wallet(chain, addr, label, st, cache, out):
-    """팀 지갑이 직접 보낸 거래 중 컨트랙트 배포, 처음 상대하는 컨트랙트 호출, AIRDROP 단어가 걸린 호출을 out에 추가한다.
-    같은 컨트랙트를 반복해서 부르는 일상 거래(정산·USDC 전송 등)는 알리지 않는다."""
+    """팀 지갑이 직접 보낸 거래 중 처음 보는 종류의 컨트랙트를 배포·호출한 것과 AIRDROP 단어가 걸린 호출을 out에 추가한다.
+    종류는 코드 지문으로 가른다. 정산 풀 생성, USDC 전송처럼 같은 종류를 반복하는 일상 거래는 알리지 않는다."""
     chainid, scan = CHAINS[chain]
     last = st.get("block")
     txs = etherscan(chainid, module="account", action="txlist", address=addr,
-                    startblock=0 if last is None else last + 1, sort="desc", page=1, offset=100)
+                    startblock=0 if last is None else last + 1, sort="desc", page=1, offset=1000)
     mine = [t for t in txs if t["from"].lower() == addr and t.get("isError") != "1"]
-    targets = set(st.get("targets", []))
-    if last is None:  # 첫 실행: 기준점만 잡는다
-        st["block"] = max([int(t["blockNumber"]) for t in txs], default=0)
-        st["targets"] = sorted({t["to"].lower() for t in mine if t["to"]})
-        return
+    learning = last is None or "kinds" not in st  # 첫 실행(또는 지문 도입 전 상태): 알리지 않고 종류만 익힌다
+    if last is None:
+        mine = mine[:30]  # 조회 횟수를 아끼려고 최근 30건으로만 익힌다
+    kinds = set(st.get("kinds", []))
 
     found = []
     for t in reversed(mine):  # 오래된 것부터
-        if t.get("contractAddress"):  # 컨트랙트 배포
-            made = t["contractAddress"].lower()
-            name = contract_name(chainid, made, cache) or "이름 미확인(검증 전)"
-            found.append(f"🚨 [{chain}] {label}: 새 컨트랙트 배포 {name}\n{scan}/address/{made}")
+        made = (t.get("contractAddress") or "").lower()
+        if not made and t.get("input", "0x") == "0x":  # ETH 단순 송금
             continue
-        to = t["to"].lower()
+        target = made or t["to"].lower()
+        new = fingerprint(chainid, target, cache["codes"]) not in kinds
+        kinds.add(cache["codes"][f"{chainid}:{target}"])
+        if learning:
+            continue
         method = t.get("functionName", "").split("(")[0] or t.get("methodId", "")
-        if t.get("input", "0x") == "0x":  # ETH 단순 송금
+        if not (new or AIRDROP.search(method)):
             continue
-        first = to not in targets
-        targets.add(to)
-        if not first and t.get("methodId") in SKIP_METHODS:
+        name = contract_name(chainid, target, cache["names"])  # 알릴 것만 이름을 조회한다
+        if made:
+            found.append(f"🚨 [{chain}] {label}: 새 컨트랙트 배포 {name or '이름 미확인(검증 전)'}\n{scan}/address/{made}")
             continue
-        name = contract_name(chainid, to, cache) or to[:10]
         hot = AIRDROP.search(f"{method} {name}") or "variational" in name.lower()
-        if first or hot:
-            mark = "🚨" if hot else "👛"
-            note = " (처음 상대하는 컨트랙트)" if first else ""
-            found.append(f"{mark} [{chain}] {label}: {method} → {name}{note}\n{scan}/tx/{t['hash']}")
+        mark = "🚨" if hot else "👛"
+        note = " (처음 보는 종류의 컨트랙트)" if new else ""
+        found.append(f"{mark} [{chain}] {label}: {method} → {name or target[:10]}{note}\n{scan}/tx/{t['hash']}")
 
-    st["block"] = max([int(t["blockNumber"]) for t in txs], default=last)
-    st["targets"] = sorted(targets)
+    st["block"] = max([int(t["blockNumber"]) for t in txs], default=last or 0)
+    st["kinds"] = sorted(kinds)
+    st.pop("targets", None)  # 예전 방식(주소별 기억)의 흔적
     out.extend(found)
 
 
@@ -209,9 +241,11 @@ def check_wallets(st, out):
     if not os.environ.get("ETHERSCAN_API_KEY"):
         print("ETHERSCAN_API_KEY 없음: 팀 지갑 감시 건너뜀", file=sys.stderr)
         return
-    cache = st.setdefault("names", {})
-    for addr, label in team_wallets(st).items():
-        for chain in CHAINS:
+    cache = {"names": st.setdefault("names", {}), "codes": st.setdefault("codes", {})}
+    wallets = [(a, l, MAINNET_CHAINS) for a, l in team_wallets(st).items()]
+    wallets += [(a, l, ["Arbitrum Sepolia"]) for a, l in TESTNET_WALLETS.items()]
+    for addr, label, chains in wallets:
+        for chain in chains:
             check_wallet(chain, addr, label, st.setdefault(f"{chain} {addr}", {}), cache, out)
 
 
