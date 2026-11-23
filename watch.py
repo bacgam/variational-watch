@@ -76,6 +76,18 @@ def etherscan(chainid, **params):
     return []
 
 
+def doc_lines(text):
+    """비교할 줄. GitBook이 모든 페이지 맨 위에 자동으로 붙이는 안내문 줄은 뺀다(플랫폼이 바꾸면 전 페이지가 오탐)."""
+    return [ln for ln in text.splitlines() if not ln.startswith("> For the complete documentation index")]
+
+
+def clip(ln, others):
+    """긴 줄은 처음 200자 대신, 반대편에서 가장 비슷한 줄과 달라지는 곳 근처 200자를 보여 준다."""
+    i = max((len(os.path.commonprefix([ln, o])) for o in others), default=0)
+    s = max(0, i - 60)
+    return ("…" if s else "") + ln[s:s + 200]
+
+
 def check_docs(st, out):
     """공식 문서에 새 페이지가 생기거나, 페이지 내용이 바뀌면 바뀐 줄을 out에 추가한다(1시간마다)."""
     now = time.time()
@@ -93,14 +105,15 @@ def check_docs(st, out):
                 mark = "🚨" if AIRDROP.search(titles[u] + text) else "📄"
                 out.append(f"{mark} [문서] 새 페이지: {titles[u]}\n{link}")
                 continue
-            if text == old[u]:
-                continue
-            changed = [ln for ln in difflib.unified_diff(old[u].splitlines(), text.splitlines(), lineterm="", n=0)
+            changed = [ln for ln in difflib.unified_diff(doc_lines(old[u]), doc_lines(text), lineterm="", n=0)
                        if ln[:1] in "+-" and not ln.startswith(("+++", "---")) and ln[1:].strip()]
+            if not changed:
+                continue
             hot = any(AIRDROP.search(ln) for ln in changed)
             if u not in KEY_PAGES and not hot:
                 continue
-            body = "\n".join(("지금: " if ln[0] == "+" else "이전: ") + ln[1:200] for ln in changed[:8])
+            body = "\n".join(("지금: " if ln[0] == "+" else "이전: ")
+                             + clip(ln[1:], [o[1:] for o in changed if o[0] != ln[0]]) for ln in changed[:8])
             if len(changed) > 8:
                 body += f"\n… 외 {len(changed) - 8}줄"
             out.append(f"{'🚨' if hot else '📄'} [문서] 바뀜: {titles[u]}\n{body}\n{link}")
